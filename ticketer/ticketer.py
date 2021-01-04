@@ -7,6 +7,10 @@ from redbot.core import commands, checks, Config, modlog
 class Ticketer(commands.Cog):
     """Ticketer"""
 
+    async def red_delete_data_for_user(self, *, requester, user_id):
+        # This cog stores no EUD
+        return
+
     def __init__(self):
         self.config = Config.get_conf(self, 200730042020, force_registration=True)
         default_guild = {
@@ -19,6 +23,7 @@ class Ticketer(commands.Cog):
             "message": "Your ticket has been created. You can add information by typing in this channel. \n\nA member of the ticket-handling-team will be with you as soon as they can.",
             "active": [],
             "modlog": True,
+            "closed": [],
         }
         self.config.register_guild(**default_guild)
 
@@ -57,20 +62,20 @@ class Ticketer(commands.Cog):
         """Set the categories for open and closed tickets."""
 
     @category.group()
-    async def open(self, ctx, category: discord.CategoryChannel):
+    async def open(self, ctx, *, category: discord.CategoryChannel):
         """Set the category for open tickets."""
         await self.config.guild(ctx.guild).open_category.set(category.id)
         await ctx.send(f"Category for open tickets has been set to {category.mention}")
 
     @category.group()
-    async def closed(self, ctx, category: discord.CategoryChannel):
+    async def closed(self, ctx, *, category: discord.CategoryChannel):
         """Set the category for open tickets."""
         await self.config.guild(ctx.guild).closed_category.set(category.id)
         await ctx.send(f"Category for closed tickets has been set to {category.mention}")
 
     @ticketer.command()
     async def message(self, ctx, *, message: str):
-        """Set the message that is shown at the start of each ticket channel."""
+        """Set the message that is shown at the start of each ticket channel.\n\nUse ``{user.mention}`` to mention the person who created the ticket."""
         await self.config.guild(ctx.guild).message.set(message)
         await ctx.send(f"The message has been set to ``{message}``.")
 
@@ -92,6 +97,7 @@ class Ticketer(commands.Cog):
 
     @ticketer.command()
     async def quicksetup(self, ctx):
+        """Sets configurations automatically."""
         settings = await self.config.guild(ctx.guild).all()
         if not settings["role"]:
             role = await ctx.guild.create_role(
@@ -139,6 +145,31 @@ class Ticketer(commands.Cog):
         else:
             await ctx.send("Something went wrong...")
 
+    @ticketer.command()
+    async def purge(self, ctx, are_you_sure: Optional[bool]):
+        """Deletes all closed ticket channels."""
+        if are_you_sure:
+            async with self.config.guild(ctx.guild).closed() as closed:
+                for channel in closed:
+                    try:
+                        channel_obj = ctx.guild.get_channel(channel)
+                        if channel_obj:
+                            await channel_obj.delete(reason="Ticket purge")
+                        closed.remove(channel)
+                    except discord.Forbidden:
+                        await ctx.send(
+                            f"I could not delete channel ID {channel} because I don't have the required permissions."
+                        )
+                    except discord.NotFound:
+                        closed.remove(channel)
+                    except discord.HTTPException:
+                        await ctx.send("Something went wrong. Aborting.")
+                        return
+        else:
+            await ctx.send(
+                f"This action will permanently delete all closed ticket channels.\nThis action is irreversible.\nConfirm with ``{ctx.clean_prefix}ticketer purge true``"
+            )
+
     @commands.group()
     async def ticket(self, ctx):
         """Manage a ticket."""
@@ -146,7 +177,10 @@ class Ticketer(commands.Cog):
 
     @ticket.command(aliases=["open"])
     async def create(
-        self, ctx, *, reason: Optional[str] = "No reason provided.",
+        self,
+        ctx,
+        *,
+        reason: Optional[str] = "No reason provided.",
     ):
         """Create a ticket."""
         if await self._check_settings(ctx):
@@ -195,9 +229,11 @@ class Ticketer(commands.Cog):
                     category=ctx.guild.get_channel(settings["open_category"]),
                     topic=reason,
                 )
-                await ticketchannel.send(settings["message"])
+                await ticketchannel.send(settings["message"].format(user=ctx.author))
                 embed = discord.Embed(
-                    title=name, description=reason, timestamp=datetime.utcnow(),
+                    title=name,
+                    description=reason,
+                    timestamp=datetime.utcnow(),
                 ).set_footer(text="Last updated at:")
                 message = await ctx.guild.get_channel(settings["channel"]).send(embed=embed)
                 async with self.config.guild(ctx.guild).active() as active:
@@ -226,7 +262,8 @@ class Ticketer(commands.Cog):
                 await (
                     await ctx.guild.get_channel(settings["channel"]).fetch_message(ticket[1])
                 ).edit(
-                    embed=new_embed, delete_after=10,
+                    embed=new_embed,
+                    delete_after=10,
                 )
                 await ctx.send(embed=new_embed)
                 await ctx.send(
@@ -248,6 +285,8 @@ class Ticketer(commands.Cog):
                 )
                 await ctx.send("Ticket closed.")
                 active.remove(ticket)
+                async with self.config.guild(ctx.guild).closed() as closed:
+                    closed.append(ticket[0])
                 success = True
         if not success:
             await ctx.send("This is not a ticket channel.")

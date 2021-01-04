@@ -2,3 +2,7 @@ __pycache__/
 readyPS.txt
 .vscode/
 desktop.ini
+*.mo
+channeldashremover/
+.history/
+.mypy_cache/
